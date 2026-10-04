@@ -1,0 +1,17 @@
+﻿{
+  "id": "/",
+  "name": "Windmi ovládání",
+  "short_name": "Windmi",
+  "description": "Dálkové ovládání tepelného čerpadla Rotenso Windmi",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#121214",
+  "theme_color": "#121214",
+  "orientation": "any",
+  "lang": "cs",
+  "icons": [
+    { "src": "icons/icon-192.svg", "sizes": "192x192", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icons/icon-512.svg", "sizes": "512x512", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
