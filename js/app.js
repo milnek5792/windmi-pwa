@@ -1,6 +1,6 @@
 /** Windmi PWA — ovládání přes MQTT (WSS). */
 
-import { MqttBridge } from './mqtt-client.js';
+import { MqttBridge } from './mqtt-client.js?v=wp1';
 
 const STORAGE_KEY = 'windmi-pwa-settings';
 const MQTT_AUTO_KEY = 'windmi-pwa-mqtt-auto';
@@ -41,8 +41,38 @@ const mqtt = new MqttBridge(applyMqttEvent);
 
 const FAULT_SHOW_MS = 2000;
 const FAULT_HIDE_MS = 800;
+/** Bez telemetrie z Tab5 (crash bez LWT) zhasni kontrolky. */
+const TELE_STALE_MS = 45000;
 let faultTimer = null;
 let faultPending = null;
+let lastTeleAt = 0;
+let staleWatchTimer = null;
+
+function markTeleReceived() {
+  lastTeleAt = Date.now();
+}
+
+function checkTeleStale() {
+  if (!state.mqttConnected || state.mqttStatus !== 'connected') {
+    return;
+  }
+  if (!state.tab5Online && !state.teleFresh) {
+    return;
+  }
+  if (!lastTeleAt || Date.now() - lastTeleAt < TELE_STALE_MS) {
+    return;
+  }
+  state.tab5Online = false;
+  clearLiveSignals();
+  render();
+}
+
+function startStaleWatch() {
+  if (staleWatchTimer) {
+    return;
+  }
+  staleWatchTimer = setInterval(checkTeleStale, 5000);
+}
 
 function resetTelemetryState() {
   state.tab5Online = false;
@@ -66,12 +96,35 @@ function resetTelemetryState() {
   faultPending = null;
 }
 
+/** Zhasni provozní signály (MB/LED) — Tab5 offline nebo MQTT drop. */
+function clearLiveSignals() {
+  state.teleFresh = false;
+  state.watchActive = false;
+  state.lin = false;
+  state.power = false;
+  state.pump = false;
+  state.compressor = false;
+  state.defrost = false;
+  state.elec = false;
+  state.setpoint = null;
+  state.eqOffset = null;
+  state.temps = { room: null, outdoor: null, inlet: null, outlet: null };
+  state.poruchaText = '';
+  state.alarm = false;
+  state.faultVisible = false;
+  state.faultText = '';
+  lastTeleAt = 0;
+  clearTimeout(faultTimer);
+  faultPending = null;
+}
+
 function isLinOk() {
+  // Bez živého Tab5 / MQTT nesvítit MB ze stale retained/lin.
+  if (!state.mqttConnected || !state.tab5Online || !state.teleFresh) {
+    return false;
+  }
   if (state.lin) {
     return true;
-  }
-  if (!state.teleFresh) {
-    return false;
   }
   return (
     state.temps.inlet != null ||
@@ -194,11 +247,24 @@ function formatOffset(v) {
 }
 
 function requireMqtt() {
-  if (mqtt.isConnected()) {
+  if (mqtt.isConnected() || mqtt.sessionActive()) {
     return true;
   }
   flashStatus('Nejdřív připoj MQTT v Nastavení');
   return false;
+}
+
+function sendCmd(suffix, payload, okLabel) {
+  if (!requireMqtt()) {
+    return false;
+  }
+  const rc = mqtt.publishCmd(suffix, payload);
+  if (rc === 'fail') {
+    flashStatus('MQTT neodpovídá — znovu Připojit');
+    return false;
+  }
+  flashStatus(rc === 'queued' ? `… ${okLabel}` : `→ ${okLabel}`);
+  return true;
 }
 
 function applyMqttEvent(ev) {
@@ -206,11 +272,9 @@ function applyMqttEvent(ev) {
     state.mqttStatus = ev.status;
     state.mqttError = ev.error || '';
     state.mqttConnected = ev.status === 'connected';
-    if (ev.status === 'connecting') {
-      state.teleFresh = false;
+    if (ev.status === 'connecting' || ev.status === 'idle' || ev.status === 'error') {
       state.tab5Online = false;
-      state.setpoint = null;
-      state.eqOffset = null;
+      clearLiveSignals();
     }
     render();
     return;
@@ -218,14 +282,20 @@ function applyMqttEvent(ev) {
 
   if (ev.type === 'mqtt') {
     state.mqttConnected = ev.connected;
-    if (!ev.connected && !ev.reconnecting) {
-      resetTelemetryState();
+    if (!ev.connected) {
+      state.tab5Online = false;
+      if (ev.reconnecting) {
+        clearLiveSignals();
+      } else {
+        resetTelemetryState();
+      }
     }
     render();
     return;
   }
 
   if (ev.type === 'tele') {
+    markTeleReceived();
     state.teleFresh = true;
     const p = ev.patch;
     if (p.temps) {
@@ -270,16 +340,7 @@ function applyMqttEvent(ev) {
     if (p.tab5Online !== undefined) {
       state.tab5Online = p.tab5Online;
       if (!p.tab5Online) {
-        state.teleFresh = false;
-        state.setpoint = null;
-        state.eqOffset = null;
-        state.temps = { room: null, outdoor: null, inlet: null, outlet: null };
-        state.poruchaText = '';
-        state.alarm = false;
-        state.faultVisible = false;
-        state.faultText = '';
-        clearTimeout(faultTimer);
-        faultPending = null;
+        clearLiveSignals();
       }
     }
     scheduleFaultBanner();
@@ -287,35 +348,54 @@ function applyMqttEvent(ev) {
   }
 }
 
+function clampRoomSp(v) {
+  // Effective SP může jít až na 16 při plánovém útlumu.
+  return Math.min(24, Math.max(16, Math.round(v * 2) / 2));
+}
+
 function adjustSetpoint(delta) {
-  if (!requireMqtt()) {
+  // Jen +/- jako Tab — nikdy absolutní hodnota.
+  const sign = delta > 0 ? '+' : '-';
+  const label =
+    state.regMode === 'equitherm' ? `korekce ${sign}` : `setpoint ${sign}`;
+
+  if (!sendCmd('setpoint', sign, label)) {
     return;
   }
-  mqtt.publishCmd('setpoint', delta > 0 ? '+' : '-');
-  const label =
-    state.regMode === 'equitherm'
-      ? `korekce ${delta > 0 ? '+' : '-'}`
-      : `setpoint ${delta > 0 ? '+' : '-'}`;
-  flashStatus(`→ ${label}`);
+
+  // Optimistický UI preview; tele/temp_set z Tabu je autorita.
+  if (state.regMode === 'room' && typeof state.setpoint === 'number') {
+    state.setpoint = clampRoomSp(
+      state.setpoint + (delta > 0 ? 0.5 : -0.5),
+    );
+  } else if (state.regMode === 'equitherm') {
+    state.eqOffset = (state.eqOffset ?? 0) + (delta > 0 ? 1 : -1);
+  } else if (state.regMode === 'water' && typeof state.setpoint === 'number') {
+    state.setpoint = Math.round(state.setpoint + (delta > 0 ? 1 : -1));
+  }
+  render();
 }
 
 function setRegMode(mode) {
-  if (!requireMqtt()) {
+  const m = mode === 'equitherm' || mode === 'water' ? mode : 'room';
+  if (!sendCmd('mode', m, `mode ${m}`)) {
     return;
   }
-  const m = mode === 'equitherm' || mode === 'water' ? mode : 'room';
-  mqtt.publishCmd('mode', m);
   state.regMode = m;
-  flashStatus(`→ mode ${m}`);
   render();
 }
 
 function setPower(on) {
-  if (!requireMqtt()) {
+  if (!sendCmd('power', on ? 'ON' : 'OFF', on ? 'START' : 'STOP')) {
     return;
   }
-  mqtt.publishCmd('power', on ? 'ON' : 'OFF');
-  flashStatus(`→ power ${on ? 'ON' : 'OFF'}`);
+  // Okamžitá odezva UI; tele z Tabu potvrdí (power/pump).
+  state.power = on;
+  if (!on) {
+    state.pump = false;
+    state.compressor = false;
+  }
+  render();
 }
 
 function flashStatus(msg) {
@@ -348,16 +428,19 @@ function mqttSigMeta() {
 }
 
 function linSigMeta() {
-  if (!state.mqttConnected && state.mqttStatus !== 'connecting') {
-    return { state: 'off', label: 'LIN: odpojeno', pulse: false };
+  if (!state.mqttConnected || state.mqttStatus === 'connecting') {
+    return { state: 'off', label: 'MB: odpojeno', pulse: false };
+  }
+  if (!state.tab5Online) {
+    return { state: 'off', label: 'MB: Tab5 offline', pulse: false };
   }
   if (isLinOk()) {
-    return { state: 'ok', label: 'LIN: OK', pulse: false };
+    return { state: 'ok', label: 'MB: OK', pulse: false };
   }
   if (state.teleFresh) {
-    return { state: 'warn', label: 'LIN: bez spojení', pulse: false };
+    return { state: 'warn', label: 'MB: bez spojení', pulse: false };
   }
-  return { state: 'off', label: 'LIN: čekám na data', pulse: false };
+  return { state: 'off', label: 'MB: čekám na data', pulse: false };
 }
 
 function applySig(el, meta, extraClass = '') {
@@ -371,7 +454,7 @@ function applySig(el, meta, extraClass = '') {
 }
 
 const STAT_LABELS = {
-  power: 'Zapnuto',
+  power: 'Provoz TČ',
   pump: 'Čerpadlo',
   compressor: 'Kompresor',
   defrost: 'Odmrazování',
@@ -391,11 +474,12 @@ function renderLeds() {
     if (!el) {
       continue;
     }
-    el.classList.toggle('stat-on', on);
+    el.classList.toggle('stat-on', !!on);
+    el.dataset.on = on ? '1' : '0';
     const name = STAT_LABELS[key] || key;
     const label = `${name}: ${on ? 'zapnuto' : 'vypnuto'}`;
     el.setAttribute('aria-label', label);
-    el.setAttribute('title', name);
+    el.setAttribute('title', label);
   }
 }
 
@@ -452,6 +536,17 @@ function render() {
 
   renderLeds();
 
+  const btnStart = $('#btn-start');
+  const btnStop = $('#btn-stop');
+  if (btnStart) {
+    btnStart.classList.toggle('btn-power-on', !!state.power);
+    btnStart.setAttribute('aria-pressed', state.power ? 'true' : 'false');
+  }
+  if (btnStop) {
+    btnStop.classList.toggle('btn-power-on', !state.power && state.mqttConnected);
+    btnStop.setAttribute('aria-pressed', !state.power ? 'true' : 'false');
+  }
+
   const sessionActive = mqttSessionActive();
   $('#btn-connect').disabled = sessionActive;
   $('#btn-disconnect').disabled = !sessionActive;
@@ -492,13 +587,43 @@ function bindNav() {
   });
 }
 
+function bindTap(el, fn) {
+  if (!el) {
+    return;
+  }
+  let last = 0;
+  const run = (ev) => {
+    if (ev) {
+      ev.preventDefault();
+    }
+    const now = Date.now();
+    if (now - last < 350) {
+      return;
+    }
+    last = now;
+    fn();
+  };
+  // pointerup = spolehlivý tap na mobilu; click = klávesnice / desktop fallback
+  el.addEventListener('pointerup', (ev) => {
+    if (ev.button != null && ev.button !== 0) {
+      return;
+    }
+    run(ev);
+  });
+  el.addEventListener('click', (ev) => {
+    if (ev.detail === 0) {
+      run(ev);
+    }
+  });
+}
+
 function bindControls() {
-  $('#btn-minus').addEventListener('click', () => adjustSetpoint(-1));
-  $('#btn-plus').addEventListener('click', () => adjustSetpoint(1));
-  $('#btn-start').addEventListener('click', () => setPower(true));
-  $('#btn-stop').addEventListener('click', () => setPower(false));
+  bindTap($('#btn-minus'), () => adjustSetpoint(-1));
+  bindTap($('#btn-plus'), () => adjustSetpoint(1));
+  bindTap($('#btn-start'), () => setPower(true));
+  bindTap($('#btn-stop'), () => setPower(false));
   document.querySelectorAll('.mode-row .chip').forEach((btn) => {
-    btn.addEventListener('click', () => setRegMode(btn.dataset.mode));
+    bindTap(btn, () => setRegMode(btn.dataset.mode));
   });
 }
 
@@ -513,7 +638,8 @@ function bindSettings() {
     const host = $('#cfg-host').value.trim();
     const user = $('#cfg-user').value.trim();
     const password = $('#cfg-pass').value;
-    const prefix = $('#cfg-prefix').value.trim() || 'windmi';
+    const prefix = mqtt.normalizePrefix($('#cfg-prefix').value);
+    $('#cfg-prefix').value = prefix;
     if (!host) {
       state.mqttStatus = 'error';
       state.mqttError = 'Zadej URL brokeru (WSS)';
@@ -537,11 +663,15 @@ function tryAutoConnect() {
   }
   const saved = loadSettings();
   if (saved.host && saved.user && saved.password) {
+    const prefix = mqtt.normalizePrefix(saved.prefix);
+    if (prefix !== saved.prefix) {
+      saveSettings({ prefix });
+    }
     mqtt.connect({
       url: saved.host,
       user: saved.user,
       password: saved.password,
-      prefix: saved.prefix || 'windmi',
+      prefix,
     });
   }
 }
@@ -550,13 +680,15 @@ async function purgeStaleWorkersAndCaches() {
   if (!('serviceWorker' in navigator)) {
     return;
   }
-  const here = `${location.origin}${location.pathname.replace(/\/[^/]*$/, '/')}`;
+  const here = new URL('./', location.href).href;
   const regs = await navigator.serviceWorker.getRegistrations();
   await Promise.all(
     regs.map(async (reg) => {
       const scope = reg.scope || '';
-      // Starý SW z kořene /Rotenso_Windmi/ by jinak ovládal i /w2/.
-      if (!scope.startsWith(here)) {
+      // Širší (rodičovský) scope ze staré instalace ovládá i /w3/ — zrušit.
+      const parentOwnsUs = here.startsWith(scope) && scope !== here;
+      const foreign = !here.startsWith(scope) && !scope.startsWith(here);
+      if (parentOwnsUs || foreign) {
         await reg.unregister();
       }
     }),
@@ -565,7 +697,12 @@ async function purgeStaleWorkersAndCaches() {
     const keys = await caches.keys();
     await Promise.all(
       keys
-        .filter((k) => k.startsWith('lg-therma') || k.startsWith('windmi-pwa-v'))
+        .filter(
+          (k) =>
+            k.startsWith('lg-therma') ||
+            k.startsWith('windmi-pwa-v') ||
+            k.startsWith('windmi-pwa-w2'),
+        )
         .map((k) => caches.delete(k)),
     );
   }
@@ -578,7 +715,7 @@ function registerSw() {
   purgeStaleWorkersAndCaches()
     .catch(() => {})
     .finally(() => {
-      navigator.serviceWorker.register('./sw.js?v=w2b').catch(() => {});
+      navigator.serviceWorker.register('./sw.js?v=wp1').catch(() => {});
     });
 }
 
@@ -586,10 +723,20 @@ function init() {
   bindNav();
   bindControls();
   bindSettings();
+  startStaleWatch();
   render();
-  window.addEventListener('beforeunload', () => {
+  // Jen watch OFF při opravdovém odchodu — ne full disconnect (mobilní bfcache/resume).
+  window.addEventListener('pagehide', (ev) => {
+    if (ev.persisted) {
+      return;
+    }
     if (mqtt.isConnected()) {
-      mqtt.disconnect(true);
+      mqtt.publishWatch(false);
+    }
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && mqtt.isConnected()) {
+      mqtt.publishWatch(true);
     }
   });
   registerSw();

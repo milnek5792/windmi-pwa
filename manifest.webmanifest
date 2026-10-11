@@ -1,8 +1,8 @@
-﻿{
-  "id": "/",
-  "name": "Windmi ovládání",
+{
+  "id": "https://milnek5792.github.io/windmi-pwa/?id=windmi-control-2026-10",
+  "name": "Windmi ovladani",
   "short_name": "Windmi",
-  "description": "Dálkové ovládání tepelného čerpadla Rotenso Windmi",
+  "description": "Dalkove ovladani tepelneho cerpadla Rotenso Windmi",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
@@ -11,7 +11,17 @@
   "orientation": "any",
   "lang": "cs",
   "icons": [
-    { "src": "icons/icon-192.svg", "sizes": "192x192", "type": "image/svg+xml", "purpose": "any" },
-    { "src": "icons/icon-512.svg", "sizes": "512x512", "type": "image/svg+xml", "purpose": "any maskable" }
+    {
+      "src": "icons/icon-192.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-512.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
   ]
 }

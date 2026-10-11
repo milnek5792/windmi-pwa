@@ -6,10 +6,10 @@
   <meta name="theme-color" content="#121214">
   <meta name="description" content="Dálkové ovládání Rotenso Windmi — PWA">
   <title>Windmi</title>
-  <link rel="manifest" href="manifest.webmanifest?v=w2b">
+  <link rel="manifest" href="manifest.webmanifest?v=wp1">
   <link rel="icon" href="icons/icon-192.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/icon-512.svg">
-  <link rel="stylesheet" href="css/styles.css?v=w2b">
+  <link rel="stylesheet" href="css/styles.css?v=wp1">
 </head>
 <body>
   <div id="app" class="app">
@@ -89,7 +89,7 @@
       </section>
 
       <section class="status-grid" aria-label="Stav zařízení">
-        <div class="stat" id="stat-power" title="Zapnuto" aria-label="Zapnuto: vypnuto">
+        <div class="stat" id="stat-power" title="Provoz TČ" aria-label="Provoz TČ: vypnuto">
           <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path d="M12 3v6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
             <path d="M8.5 4.5a7 7 0 1 0 7 0" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
@@ -160,7 +160,7 @@
     </nav>
   </div>
 
-  <script src="https://unpkg.com/mqtt@5.10.4/dist/mqtt.min.js"></script>
-  <script type="module" src="js/app.js?v=w2b"></script>
+  <script src="js/mqtt.min.js?v=wp1"></script>
+  <script type="module" src="js/app.js?v=wp1"></script>
 </body>
 </html>
