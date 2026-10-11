@@ -4,25 +4,15 @@
 const HYDRATE_SKIP_RETAINED = new Set(['tele/alarm', 'tele/porucha']);
 const TELE_NA = '___';
 
-const TELE_SUFFIXES = [
-  'availability',
-  'tele/temp_room',
-  'tele/temp_outdoor',
-  'tele/temp_inlet',
-  'tele/temp_outlet',
-  'tele/temp_set',
-  'tele/reg_mode',
-  'tele/eq_offset',
-  'tele/power',
-  'tele/pump',
-  'tele/compressor',
-  'tele/lin',
-  'tele/defrost',
-  'tele/elec_heat',
-  'tele/alarm',
-  'tele/porucha',
-  'tele/watch',
-];
+/**
+ * Málo subscriptions — EMQX Serverless má nízký limit (~10/client).
+ * Individuální tele/* topiců je víc než limit → compressor/defrost se
+ * neodebíraly. Wildcard tele/# + availability = 2 odběry.
+ */
+const SUBSCRIBE_FILTERS = ['availability', 'tele/#'];
+
+/** Fronta příkazů přes krátký reconnect (mobilní PWA často dropne WS). */
+const MAX_PENDING_CMDS = 8;
 
 export class MqttBridge {
   constructor(onState) {
@@ -36,6 +26,7 @@ export class MqttBridge {
     this.hydrateTimer = null;
     this.closing = false;
     this.userStopped = false;
+    this.pendingCmds = [];
   }
 
   sessionActive() {
@@ -53,6 +44,13 @@ export class MqttBridge {
     return `${this.prefix}/${suffix}`;
   }
 
+  normalizePrefix(prefix) {
+    return String(prefix || 'windmi')
+      .trim()
+      .replace(/\/+$/, '')
+      .toLowerCase() || 'windmi';
+  }
+
   connect({ url, user, password, prefix }) {
     if (typeof mqtt === 'undefined') {
       this.setStatus('error', 'mqtt.js se nenačetlo');
@@ -60,7 +58,7 @@ export class MqttBridge {
     }
     this.disconnect(false);
     this.userStopped = false;
-    this.prefix = (prefix || 'windmi').replace(/\/+$/, '');
+    this.prefix = this.normalizePrefix(prefix);
     this.setStatus('connecting', '');
 
     const clientId = `WindmiPWA_${Math.random().toString(16).slice(2, 10)}`;
@@ -68,10 +66,11 @@ export class MqttBridge {
       username: user || undefined,
       password: password || undefined,
       clientId,
-      reconnectPeriod: 5000,
+      reconnectPeriod: 3000,
       connectTimeout: 20_000,
       keepalive: 45,
       clean: true,
+      queueQoSZero: true,
     });
 
     this.client.on('connect', () => {
@@ -80,6 +79,7 @@ export class MqttBridge {
       this.subscribeAll();
       this.publishWatch(true);
       this.startWatchKeepalive();
+      this.flushPendingCmds();
     });
 
     this.client.on('reconnect', () => {
@@ -111,6 +111,7 @@ export class MqttBridge {
   disconnect(sendWatchOff = true) {
     this.userStopped = true;
     this.closing = true;
+    this.pendingCmds = [];
     this.stopWatchKeepalive();
     this.endHydrate();
     if (this.client) {
@@ -172,7 +173,7 @@ export class MqttBridge {
     if (!this.client?.connected) {
       return;
     }
-    for (const suffix of TELE_SUFFIXES) {
+    for (const suffix of SUBSCRIBE_FILTERS) {
       this.client.subscribe(this.topic(suffix), { qos: 0 });
     }
   }
@@ -190,7 +191,7 @@ export class MqttBridge {
       if (this.client?.connected) {
         this.publishWatch(true);
       }
-    }, 120_000);
+    }, 60_000);
   }
 
   stopWatchKeepalive() {
@@ -200,15 +201,55 @@ export class MqttBridge {
     }
   }
 
-  publishCmd(suffix, payload) {
-    if (!this.client?.connected) {
-      return false;
+  enqueuePending(suffix, payload) {
+    this.pendingCmds.push({ suffix, payload });
+    while (this.pendingCmds.length > MAX_PENDING_CMDS) {
+      this.pendingCmds.shift();
     }
-    this.client.publish(this.topic(`cmd/${suffix}`), String(payload), { qos: 0 });
+  }
+
+  flushPendingCmds() {
+    if (!this.client?.connected || this.pendingCmds.length === 0) {
+      return;
+    }
+    const batch = this.pendingCmds.splice(0, this.pendingCmds.length);
+    for (const cmd of batch) {
+      this.publishCmdNow(cmd.suffix, cmd.payload);
+    }
+  }
+
+  publishCmdNow(suffix, payload) {
+    // Watch dřív — Tab přepne do rychlé tele před power/setpoint.
     if (suffix !== 'watch') {
       this.publishWatch(true);
     }
-    return true;
+    const topic = this.topic(`cmd/${suffix}`);
+    // qos 0 — qos 1 po pádu Tab5 znovu doručí burst a znovu ho shodí
+    this.client.publish(topic, String(payload), { qos: 0 }, (err) => {
+      if (err) {
+        console.warn('[MQTT] publish fail', topic, err);
+        this.enqueuePending(suffix, payload);
+      }
+    });
+  }
+
+  /**
+   * Pošle cmd/* (qos 1). Při krátkém výpadku frontuje a odešle po reconnectu.
+   * @returns {'ok'|'queued'|'fail'}
+   */
+  publishCmd(suffix, payload) {
+    if (this.userStopped) {
+      return 'fail';
+    }
+    if (this.client?.connected) {
+      this.publishCmdNow(suffix, payload);
+      return 'ok';
+    }
+    if (this.sessionActive()) {
+      this.enqueuePending(suffix, payload);
+      return 'queued';
+    }
+    return 'fail';
   }
 
   handleMessage(topic, raw, retained = false) {
@@ -333,7 +374,16 @@ function normalizeRegMode(v) {
 
 function parseOnOff(v) {
   const s = String(v).trim().toUpperCase();
-  return s === 'ON' || s === '1' || s === 'TRUE' || s === 'START';
+  if (!s || s === 'OFF' || s === '0' || s === 'FALSE' || s === 'STOP' ||
+      s === TELE_NA || s === '---') {
+    return false;
+  }
+  if (s === 'ON' || s === '1' || s === 'TRUE' || s === 'START' || s === 'YES') {
+    return true;
+  }
+  // Číselná frekvence (Hz) — kompresor běží
+  const n = Number.parseFloat(s);
+  return Number.isFinite(n) && n > 0;
 }
 
 function parseTemp(v) {
