@@ -1,23 +1,149 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="cs">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#121214">
-  <title>Windmi — instalace</title>
+  <meta name="robots" content="noindex">
+  <title>Windmi — nová instalace</title>
   <style>
-    body{margin:0;min-height:100dvh;background:#121214;color:#e0e0e6;font-family:system-ui,sans-serif;padding:20px;line-height:1.45}
-    .btn{display:inline-block;margin:8px 8px 0 0;padding:14px 18px;border:0;border-radius:10px;background:#0a84ff;color:#fff;font-weight:700;text-decoration:none}
-    .ok{color:#30d158;font-weight:700}
+    body {
+      margin: 0; min-height: 100dvh; background: #121214; color: #e0e0e6;
+      font-family: system-ui, sans-serif; padding: 20px 18px 40px; line-height: 1.45;
+    }
+    h1 { font-size: 1.35rem; margin: 0 0 8px; }
+    .box {
+      background: #1a1a1f; border: 1px solid #24242b; border-radius: 12px;
+      padding: 14px 16px; margin: 14px 0;
+    }
+    .bad { color: #ff453a; font-weight: 700; }
+    .ok { color: #30d158; font-weight: 700; }
+    .warn { color: #ff9f0a; font-weight: 700; }
+    ol { padding-left: 1.2rem; margin: 8px 0; }
+    li { margin: 8px 0; }
+    kbd, code { color: #64d2ff; }
+    .btn {
+      display: inline-block; margin: 8px 8px 0 0; padding: 14px 18px; border: 0;
+      border-radius: 10px; background: #0a84ff; color: #fff; font-weight: 700;
+      text-decoration: none; font-size: 1rem; cursor: pointer;
+    }
+    .btn2 { background: #2c2c2e; }
+    .btn:disabled { opacity: 0.45; }
+    #log { margin-top: 12px; color: #8e8e93; font-size: 0.85rem; white-space: pre-wrap; }
   </style>
 </head>
 <body>
-  <h1>Instalace Windmi</h1>
-  <p class="ok">Toto je samostatna adresa (jiny web nez stary Rotenso_Windmi).</p>
-  <ol>
-    <li>Otevri v Chrome s adresnim radkem (ne z ikony).</li>
-    <li>Menu <b>⋮</b> → <b>Nainstalovat aplikaci</b> / <b>Pridat na plochu</b>.</li>
-  </ol>
-  <a class="btn" href="./index.html">Otevrit Windmi</a>
+  <h1>Nová PWA Windmi W3</h1>
+  <div id="status" class="box">Kontroluji…</div>
+
+  <div class="box">
+    <p class="warn">Chrome hlásí „už nainstalováno“, protože stará ikona má scope na celý web
+    <code>/Rotenso_Windmi/</code> — včetně této nové cesty <code>/w3/</code>.</p>
+    <p>Bez smazání staré ikony <b>nejde</b> nainstalovat znovu. Žádná nová URL v tom samém repu to neobejde.</p>
+  </div>
+
+  <div class="box">
+    <p><b>Android — odinstalace</b></p>
+    <ol>
+      <li>Zavři Windmi úplně (odeber z recent / přehledu aplikací).</li>
+      <li>Dlouze podrž ikonu <b>Windmi</b> na ploše → <b>Informace o aplikaci</b> / Odinstalovat
+        (nebo Nastavení → Aplikace → Windmi / Chrome → Odinstalovat).</li>
+      <li>V Chrome otevři znovu tuto stránku (z odkazu níž, ne z ikony).</li>
+      <li>Menu Chrome ⋮ → <b>Nainstalovat aplikaci</b> / Přidat na plochu.</li>
+    </ol>
+    <p><b>Počítač</b></p>
+    <ol>
+      <li>Do adresního řádku: <kbd>chrome://apps</kbd> → odstraň Windmi.</li>
+      <li>Ještě: Nastavení Chrome → Soukromí → Smazat data webu pro
+        <code>milnek5792.github.io</code>.</li>
+      <li>Obnov tuto stránku a nainstaluj.</li>
+    </ol>
+  </div>
+
+  <button type="button" class="btn btn2" id="wipe">1) Vymazat SW + cache webu</button>
+  <a class="btn" id="open-app" href="./index.html">2) Otevřít Windmi W3</a>
+  <button type="button" class="btn" id="install" disabled>Nainstalovat (až Chrome nabídne)</button>
+
+  <div id="log"></div>
+
+  <script>
+    const status = document.getElementById('status');
+    const logEl = document.getElementById('log');
+    const btnInstall = document.getElementById('install');
+    let deferredPrompt = null;
+
+    function log(m) { logEl.textContent += m + '\n'; }
+
+    const standalone =
+      window.matchMedia('(display-mode: standalone)').matches ||
+      window.matchMedia('(display-mode: fullscreen)').matches ||
+      window.navigator.standalone === true;
+
+    if (standalone) {
+      status.innerHTML =
+        '<span class="bad">Jsi ve STARÉ nainstalované aplikaci (standalone).</span><br>' +
+        'Tady se nové „Nainstalovat“ neobjeví. Odinstaluj ikonu Windmi a otevři tento odkaz ' +
+        'v běžném Chrome (s adresním řádkem).';
+    } else {
+      status.innerHTML =
+        '<span class="ok">Prohlížečový režim — po odinstalaci staré ikony jde W3 nainstalovat.</span>';
+    }
+
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferredPrompt = e;
+      btnInstall.disabled = false;
+      status.innerHTML =
+        '<span class="ok">Chrome nabízí instalaci — klepni na „Nainstalovat“.</span>';
+    });
+
+    window.addEventListener('appinstalled', () => {
+      status.innerHTML = '<span class="ok">Nainstalováno. Spusť Windmi W3 z plochy.</span>';
+      btnInstall.disabled = true;
+      deferredPrompt = null;
+    });
+
+    btnInstall.addEventListener('click', async () => {
+      if (!deferredPrompt) return;
+      deferredPrompt.prompt();
+      const choice = await deferredPrompt.userChoice;
+      log('install: ' + choice.outcome);
+      deferredPrompt = null;
+      btnInstall.disabled = true;
+    });
+
+    document.getElementById('wipe').addEventListener('click', async () => {
+      logEl.textContent = '';
+      try {
+        if ('serviceWorker' in navigator) {
+          for (const reg of await navigator.serviceWorker.getRegistrations()) {
+            const ok = await reg.unregister();
+            log('SW off: ' + (reg.scope || '?') + ' → ' + ok);
+          }
+        }
+        if (window.caches) {
+          for (const key of await caches.keys()) {
+            await caches.delete(key);
+            log('cache: ' + key);
+          }
+        }
+        try {
+          localStorage.clear();
+          sessionStorage.clear();
+          log('storage cleared');
+        } catch (e) {
+          log('storage: ' + e);
+        }
+        log('Hotovo. Zavři Chrome úplně, pak znovu otevři tuto stránku v prohlížeči.');
+      } catch (e) {
+        log(String(e));
+      }
+    });
+
+    // Zaregistruj root killer SW (starý scope), ať se při další návštěvě kořene vyčistí.
+    if ('serviceWorker' in navigator && !standalone) {
+      navigator.serviceWorker.register('../sw.js?v=kill1').catch(() => {});
+    }
+  </script>
 </body>
 </html>

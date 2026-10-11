@@ -1,6 +1,6 @@
 /** Windmi PWA — ovládání přes MQTT (WSS). */
 
-import { MqttBridge } from './mqtt-client.js?v=wp1';
+import { MqttBridge } from './mqtt-client.js?v=wp2';
 
 const STORAGE_KEY = 'windmi-pwa-settings';
 const MQTT_AUTO_KEY = 'windmi-pwa-mqtt-auto';
@@ -715,7 +715,7 @@ function registerSw() {
   purgeStaleWorkersAndCaches()
     .catch(() => {})
     .finally(() => {
-      navigator.serviceWorker.register('./sw.js?v=wp1').catch(() => {});
+      navigator.serviceWorker.register('./sw.js?v=wp2').catch(() => {});
     });
 }
 

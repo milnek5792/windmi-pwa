@@ -1,4 +1,4 @@
-const CACHE = 'windmi-pwa-standalone-v1';
+const CACHE = 'windmi-pwa-standalone-v2';
 const ASSETS = [
   './',
   './index.html',
@@ -7,6 +7,8 @@ const ASSETS = [
   './js/mqtt-client.js',
   './js/mqtt.min.js',
   './manifest.webmanifest',
+  './icons/icon-192.png',
+  './icons/icon-512.png',
   './icons/icon-192.svg',
   './icons/icon-512.svg',
 ];
